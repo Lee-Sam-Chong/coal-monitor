@@ -1,0 +1,32 @@
+name: 📊 定时抓取煤炭产量数据
+
+on:
+  schedule:
+    - cron: "0 18 15 * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r requirements.txt --quiet
+      - name: Export data
+        run: python export_static.py
+      - name: Commit data
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add docs/data.json docs/data.csv
+          git diff --staged --quiet || git commit -m "🤖 Auto update $(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
+          git push
