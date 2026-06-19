@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中国煤炭月度产量数据监测</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .status-dot.online { background: #22c55e; }
+        .status-dot.offline { background: #ef4444; }
+        .status-dot.loading { background: #f59e0b; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .chart-container { position: relative; height: 400px; width: 100%; }
+        .loading-overlay {
+            position: absolute; inset: 0; display: flex;
+            align-items: center; justify-content: center;
+            background: rgba(255,255,255,0.7); z-index: 10;
+        }
+        .loading-spinner {
+            width: 40px; height: 40px; border: 3px solid #e5e7eb;
+            border-top-color: #3b82f6; border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .change-up { color: #ef4444; }
+        .change-down { color: #22c55e; }
+        .change-zero { color: #6b7280; }
+        .toast {
+            position: fixed; top: 20px; right: 20px; padding: 12px 24px;
+            border-radius: 8px; color: white; z-index: 9999;
+            transform: translateX(120%); transition: transform 0.3s ease;
+        }
+        .toast.show { transform: translateX(0); }
+        .toast.success { background: #22c55e; }
+        .toast.error { background: #ef4444; }
+        .toast.info { background: #3b82f6; }
+        @media (max-width: 640px) {
+            .chart-container { height: 280px; }
+            .table-scroll { font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div id="toast" class="toast"></div>
+
+    <!-- 顶部 -->
+    <header class="bg-gradient-to-r from-blue-700 to-blue-500 text-white shadow-lg">
+        <div class="max-w-6xl mx-auto px-4 py-6">
+            <div class="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                    <h1 class="text-2xl font-bold sm:text-3xl">⛏️ 中国煤炭月度产量数据监测</h1>
+                    <p class="text-blue-100 mt-1 text-sm sm:text-base">
+                        China Raw Coal Monthly Production Monitor
+                    </p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <div class="text-xs text-blue-200">数据状态</div>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                            <span id="statusDot" class="status-dot loading"></span>
+                            <span id="statusText" class="text-sm font-medium">加载中...</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs text-blue-200">数据范围</div>
+                        <div id="dateRange" class="text-sm font-medium">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+        <!-- 控制栏 -->
+        <div class="card p-4 sm:p-6">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div class="flex-1 w-full sm:w-auto">
+                    <label class="block text-sm font-medium text-gray-600 mb-1.5">🌏 选择地区</label>
+                    <select id="regionSelect"
+                            class="w-full sm:w-72 px-3 py-2.5 border border-gray-300 rounded-lg
+                                   text-gray-700 bg-white focus:ring-2 focus:ring-blue-500
+                                   focus:border-blue-500 transition">
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <div class="flex-1 w-full sm:w-auto">
+                    <label class="block text-sm font-medium text-gray-600 mb-1.5">📊 显示时间范围</label>
+                    <select id="monthsSelect"
+                            class="w-full sm:w-48 px-3 py-2.5 border border-gray-300 rounded-lg
+                                   text-gray-700 bg-white focus:ring-2 focus:ring-blue-500
+                                   focus:border-blue-500 transition">
+                        <option value="6">最近 6 个月</option>
+                        <option value="12" selected>最近 12 个月</option>
+                        <option value="24">最近 24 个月</option>
+                        <option value="36">最近 36 个月</option>
+                    </select>
+                </div>
+                <div class="flex gap-2 self-end sm:self-center pt-4 sm:pt-0">
+                    <button onclick="refreshData()"
+                            class="px-4 py-2.5 bg-blue-600 text-white rounded-lg
+                                   hover:bg-blue-700 transition text-sm font-medium
+                                   flex items-center gap-1.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        刷新
+                    </button>
+                    <button onclick="seedData()"
+                            class="px-4 py-2.5 bg-gray-600 text-white rounded-lg
+                                   hover:bg-gray-700 transition text-sm font-medium">
+                        示例数据
+                    </button>
+                    <button onclick="downloadCSV()"
+                            class="px-4 py-2.5 bg-green-600 text-white rounded-lg
+                                   hover:bg-green-700 transition text-sm font-medium
+                                   flex items-center gap-1.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                        </svg>
+                        下载 CSV
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 图表 -->
+        <div class="card p-4 sm:p-6">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 id="chartTitle" class="text-lg font-semibold text-gray-800">全国原煤月度产量趋势</h2>
+                    <p class="text-sm text-gray-500 mt-0.5">单位：万吨</p>
+                </div>
+                <div class="flex items-center gap-2 text-sm text-gray-500">
+                    <span id="avgOutput" class="font-medium">-</span>
+                    <span>月均</span>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="productionChart"></canvas>
+                <div id="chartLoading" class="loading-overlay">
+                    <div class="loading-spinner"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 详细表格 -->
+        <div class="card p-4 sm:p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-gray-800">📋 详细数据</h3>
+                <span id="tableRegion" class="text-sm text-gray-500">全国</span>
+            </div>
+            <div class="overflow-x-auto table-scroll">
+                <table class="w-full text-sm whitespace-nowrap">
+                    <thead>
+                        <tr class="border-b-2 border-gray-200">
+                            <th class="text-left py-3 px-2 text-gray-600 font-medium">年月</th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium">当月值<br><span class="text-xs font-normal">(万吨)</span></th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium">环比变化<br><span class="text-xs font-normal">(万吨)</span></th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium">环比<br><span class="text-xs font-normal">(%)</span></th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium">同比<br><span class="text-xs font-normal">(%)</span></th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium">累计值<br><span class="text-xs font-normal">(万吨)</span></th>
+                            <th class="text-right py-3 px-2 text-gray-600 font-medium hidden sm:table-cell">累计同比<br><span class="text-xs font-normal">(%)</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataTableBody">
+                        <tr><td colspan="7" class="text-center py-8 text-gray-400">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <footer class="text-center text-sm text-gray-400 py-4 border-t border-gray-200">
+            <p>数据来源：国家统计局 (data.stats.gov.cn) | 中国煤炭月度产量数据监测系统</p>
+            <p class="mt-1">© <span id="footerYear">2024</span> · 自动更新 · 仅供研究参考</p>
+        </footer>
+    </main>
+
+    <script>
+        // ─── 全局状态 ────────────────────────────────────────
+        let chart = null;
+        let currentRegion = "全国";
+        let currentMonths = 12;
+
+        const regionSelect = document.getElementById("regionSelect");
+        const monthsSelect = document.getElementById("monthsSelect");
+        const chartCanvas = document.getElementById("productionChart");
+        const chartLoading = document.getElementById("chartLoading");
+        const chartTitle = document.getElementById("chartTitle");
+        const avgOutput = document.getElementById("avgOutput");
+        const dataTableBody = document.getElementById("dataTableBody");
+        const tableRegion = document.getElementById("tableRegion");
+        const statusDot = document.getElementById("statusDot");
+        const statusText = document.getElementById("statusText");
+        const dateRange = document.getElementById("dateRange");
+        const footerYear = document.getElementById("footerYear");
+
+        footerYear.textContent = new Date().getFullYear();
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            await loadRegions();
+            regionSelect.value = currentRegion;
+            await Promise.all([loadChart(), loadTable(), loadStats()]);
+        });
+
+        regionSelect.addEventListener("change", async () => {
+            currentRegion = regionSelect.value;
+            await Promise.all([loadChart(), loadTable()]);
+        });
+
+        monthsSelect.addEventListener("change", async () => {
+            currentMonths = parseInt(monthsSelect.value);
+            await Promise.all([loadChart(), loadTable()]);
+        });
+
+        // ─── 地区列表 ──────────────────────────────────────
+        async function loadRegions() {
+            const res = await fetch("/api/production/regions");
+            const data = await res.json();
+            regionSelect.innerHTML = "";
+            data.regions.forEach(r => {
+                const opt = document.createElement("option");
+                opt.value = r;
+                opt.textContent = r;
+                regionSelect.appendChild(opt);
+            });
+        }
+
+        // ─── 图表 ──────────────────────────────────────────
+        async function loadChart() {
+            chartLoading.style.display = "flex";
+            try {
+                const res = await fetch(
+                    `/api/production?region=${encodeURIComponent(currentRegion)}&months=${currentMonths}`
+                );
+                const data = await res.json();
+
+                if (!data.data || !data.data.length) {
+                    chartLoading.style.display = "none";
+                    chartTitle.textContent = `${currentRegion}原煤月度产量趋势（暂无数据）`;
+                    return;
+                }
+
+                const labels = data.data.map(d => d.year_month);
+                const values = data.data.map(d => d.output);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+                chartTitle.textContent = `${currentRegion}原煤月度产量趋势`;
+                avgOutput.textContent = avg.toFixed(1) + "万吨";
+
+                if (chart) {
+                    chart.data.labels = labels;
+                    chart.data.datasets[0].data = values;
+                    chart.update();
+                } else {
+                    const ctx = chartCanvas.getContext("2d");
+                    chart = new Chart(ctx, {
+                        type: "line",
+                        data: {
+                            labels,
+                            datasets: [{
+                                label: "产量（万吨）",
+                                data: values,
+                                borderColor: "#3b82f6",
+                                backgroundColor: "rgba(59,130,246,0.1)",
+                                borderWidth: 2.5,
+                                pointRadius: 4,
+                                pointHoverRadius: 6,
+                                pointBackgroundColor: "#3b82f6",
+                                pointBorderColor: "white",
+                                pointBorderWidth: 2,
+                                fill: true,
+                                tension: 0.3,
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { intersect: false, mode: "index" },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: "rgba(0,0,0,0.8)",
+                                    padding: 12,
+                                    cornerRadius: 8,
+                                    callbacks: {
+                                        label: ctx => `产量: ${ctx.parsed.y.toFixed(2)} 万吨`
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    grid: { display: false },
+                                    ticks: { maxRotation: 45, font: { size: 11 } }
+                                },
+                                y: {
+                                    beginAtZero: false,
+                                    grid: { color: "rgba(0,0,0,0.06)" },
+                                    ticks: {
+                                        callback: v => v.toLocaleString() + " 万吨",
+                                        font: { size: 11 }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error("图表加载失败:", e);
+            } finally {
+                chartLoading.style.display = "none";
+            }
+        }
+
+        // ─── 详细表格 ──────────────────────────────────────
+        async function loadTable() {
+            try {
+                const res = await fetch(
+                    `/api/production/table?region=${encodeURIComponent(currentRegion)}&months=${Math.max(currentMonths, 6)}`
+                );
+                const json = await res.json();
+                const data = json.data || [];
+                tableRegion.textContent = currentRegion;
+
+                if (!data.length) {
+                    dataTableBody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-gray-400">暂无数据</td></tr>`;
+                    return;
+                }
+
+                // 最新的在上面
+                const rows = [...data].reverse();
+
+                dataTableBody.innerHTML = rows.map(d => `
+                    <tr class="border-b border-gray-100 hover:bg-gray-50 transition">
+                        <td class="py-3 px-2 font-medium text-gray-700">${d.year_month}</td>
+                        <td class="text-right py-3 px-2 font-medium tabular-nums">${fmt(d.output)}</td>
+                        <td class="text-right py-3 px-2 tabular-nums">${fmtChange(d.mom_change)}</td>
+                        <td class="text-right py-3 px-2 tabular-nums">${fmtPct(d.mom_change_pct)}</td>
+                        <td class="text-right py-3 px-2 tabular-nums">${fmtPct(d.yoy_change_pct)}</td>
+                        <td class="text-right py-3 px-2 tabular-nums font-medium">${fmt(d.ytd)}</td>
+                        <td class="text-right py-3 px-2 tabular-nums hidden sm:table-cell">${fmtPct(d.ytd_yoy_pct)}</td>
+                    </tr>
+                `).join("");
+
+            } catch (e) {
+                console.error("表格加载失败:", e);
+                dataTableBody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-red-400">加载失败</td></tr>`;
+            }
+        }
+
+        function fmt(v) {
+            if (v === null || v === undefined) return '<span class="change-zero">-</span>';
+            return Number(v).toLocaleString("zh-CN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
+
+        function fmtChange(v) {
+            if (v === null || v === undefined) return '<span class="change-zero">-</span>';
+            if (v > 0) return `<span class="change-up">↑ ${v.toFixed(2)}</span>`;
+            if (v < 0) return `<span class="change-down">↓ ${Math.abs(v).toFixed(2)}</span>`;
+            return '<span class="change-zero">0.00</span>';
+        }
+
+        function fmtPct(v) {
+            if (v === null || v === undefined) return '<span class="change-zero">-</span>';
+            if (v > 0) return `<span class="change-up">↑ ${v.toFixed(2)}%</span>`;
+            if (v < 0) return `<span class="change-down">↓ ${Math.abs(v).toFixed(2)}%</span>`;
+            return '<span class="change-zero">0.00%</span>';
+        }
+
+        // ─── 统计信息 ──────────────────────────────────────
+        async function loadStats() {
+            try {
+                const res = await fetch("/api/production/statistics");
+                const data = await res.json();
+                if (data.record_count > 0) {
+                    statusDot.className = "status-dot online";
+                    statusText.textContent = `✅ ${data.region_count} 个地区 · ${data.record_count} 条记录`;
+                    dateRange.textContent = `${data.min_ym} ~ ${data.max_ym}`;
+                } else {
+                    statusDot.className = "status-dot offline";
+                    statusText.textContent = "暂无数据";
+                    dateRange.textContent = "-";
+                }
+            } catch (e) {
+                statusDot.className = "status-dot offline";
+                statusText.textContent = "连接失败";
+            }
+        }
+
+        // ─── 刷新 ──────────────────────────────────────────
+        async function refreshData() {
+            showToast("正在刷新数据...", "info");
+            try {
+                const res = await fetch("/api/production/refresh");
+                const data = await res.json();
+                if (data.status === "success") {
+                    showToast(data.message, "success");
+                    await Promise.all([loadChart(), loadTable(), loadStats(), loadRegions()]);
+                } else {
+                    showToast(data.message || "刷新失败", "error");
+                }
+            } catch (e) {
+                showToast("刷新请求失败", "error");
+            }
+        }
+
+        async function seedData() {
+            try {
+                const res = await fetch("/api/production/seed");
+                const data = await res.json();
+                if (data.status === "success") {
+                    showToast(data.message, "success");
+                    await Promise.all([loadChart(), loadTable(), loadStats(), loadRegions()]);
+                } else {
+                    showToast(data.message || "生成失败", "error");
+                }
+            } catch (e) {
+                showToast("生成请求失败", "error");
+            }
+        }
+
+        // ─── CSV 下载 ──────────────────────────────────────
+        function downloadCSV() {
+            const url = `/api/production/download?region=${encodeURIComponent(currentRegion)}&months=120`;
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast("CSV 下载已开始", "success");
+        }
+
+        // ─── Toast ─────────────────────────────────────────
+        function showToast(message, type = "info") {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.classList.add("show");
+            clearTimeout(toast._hideTimer);
+            toast._hideTimer = setTimeout(() => toast.classList.remove("show"), 3000);
+        }
+
+        // 暴露全局
+        window.refreshData = refreshData;
+        window.seedData = seedData;
+        window.downloadCSV = downloadCSV;
+    </script>
+</body>
+</html>
