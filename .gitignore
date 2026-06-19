@@ -1,0 +1,7 @@
+# 数据目录
+data/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
